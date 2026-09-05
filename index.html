@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>엑셀 조사표 도우미</title>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --panel: #ffffff;
+    --border: #d9dee3;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-dark: #1d4ed8;
+    --error: #dc2626;
+    --success: #16a34a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Malgun Gothic", -apple-system, "Segoe UI", sans-serif;
+    font-size: 18px;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 26px; text-align: center; margin-bottom: 8px; }
+  .subtitle { text-align: center; color: var(--muted); font-size: 16px; margin-bottom: 28px; }
+
+  .steps {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 28px;
+    font-size: 15px;
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
+  .steps .step { padding: 6px 14px; border-radius: 20px; background: var(--panel); border: 1px solid var(--border); }
+  .steps .step.active { background: var(--accent); color: white; border-color: var(--accent); font-weight: 700; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  .upload-box {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+  }
+  .upload-box:hover { border-color: var(--accent); background: #f0f5ff; }
+  .upload-box .icon { font-size: 40px; margin-bottom: 10px; }
+  #file-input { display: none; }
+
+  .error { color: var(--error); font-size: 16px; margin-top: 14px; text-align: center; }
+
+  .progress { color: var(--muted); font-size: 16px; margin-bottom: 10px; text-align: center; }
+  .question-text { font-size: 24px; font-weight: 700; text-align: center; margin-bottom: 8px; }
+  .example-hint { color: var(--muted); font-size: 16px; text-align: center; margin-bottom: 22px; }
+
+  .big-input {
+    width: 100%;
+    font-size: 22px;
+    padding: 16px;
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    text-align: center;
+  }
+  .big-input:focus { outline: none; border-color: var(--accent); }
+
+  .nav-buttons { display: flex; justify-content: space-between; gap: 12px; margin-top: 28px; }
+
+  button {
+    cursor: pointer;
+    border: none;
+    border-radius: 10px;
+    padding: 14px 22px;
+    font-size: 17px;
+    font-weight: 700;
+    background: var(--accent);
+    color: white;
+  }
+  button:hover { background: var(--accent-dark); }
+  button.secondary { background: #e5e7eb; color: var(--text); }
+  button.secondary:hover { background: #d1d5db; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.full { width: 100%; }
+
+  .review-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .review-item:last-child { border-bottom: none; }
+  .review-item .label { color: var(--muted); font-size: 15px; }
+  .review-item .value { font-size: 19px; font-weight: 700; }
+  .review-item button { padding: 8px 14px; font-size: 14px; }
+
+  .done-icon { font-size: 52px; text-align: center; margin-bottom: 10px; }
+  .done-text { text-align: center; font-size: 20px; font-weight: 700; margin-bottom: 24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📋 엑셀 조사표 도우미</h1>
+  <p class="subtitle">엑셀 파일을 올리면 질문에 답하는 것만으로 자동으로 채워드려요.</p>
+
+  <div class="steps">
+    <span class="step" data-step="upload">1. 파일 올리기</span>
+    <span class="step" data-step="question">2. 질문에 답하기</span>
+    <span class="step" data-step="review">3. 확인하고 저장</span>
+  </div>
+
+  <div id="step-upload" class="panel">
+    <div class="upload-box" id="upload-box">
+      <div class="icon">📁</div>
+      <div>여기를 눌러서 엑셀 파일을 선택해주세요</div>
+      <div style="color:var(--muted); font-size:14px; margin-top:8px;">(.xlsx 파일)</div>
+    </div>
+    <input type="file" id="file-input" accept=".xlsx">
+    <p id="upload-error" class="error" style="display:none;"></p>
+  </div>
+
+  <div id="step-question" class="panel" style="display:none;">
+    <div class="progress" id="q-progress"></div>
+    <div class="question-text" id="q-text"></div>
+    <div class="example-hint" id="q-example"></div>
+    <input class="big-input" id="q-input">
+    <div class="nav-buttons">
+      <button class="secondary" id="prev-btn">← 이전</button>
+      <button id="next-btn">다음 →</button>
+    </div>
+  </div>
+
+  <div id="step-review" class="panel" style="display:none;">
+    <h2 style="margin-top:0;">입력하신 내용을 확인해주세요</h2>
+    <div id="review-list"></div>
+    <button class="full" id="save-btn" style="margin-top:20px;">✅ 완성된 파일 저장하기</button>
+  </div>
+
+  <div id="step-done" class="panel" style="display:none;">
+    <div class="done-icon">🎉</div>
+    <div class="done-text">완성된 파일이 다운로드되었습니다!</div>
+    <button class="full secondary" id="restart-btn">다른 파일로 다시 시작</button>
+  </div>
+</div>
+
+<script>
+const EXAMPLE_MARKER_PREFIX = '(예시';
+
+const stepEls = {
+  upload: document.getElementById('step-upload'),
+  question: document.getElementById('step-question'),
+  review: document.getElementById('step-review'),
+  done: document.getElementById('step-done'),
+};
+const stepIndicators = document.querySelectorAll('.steps .step');
+
+function showStep(name) {
+  Object.entries(stepEls).forEach(([key, el]) => { el.style.display = key === name ? 'block' : 'none'; });
+  stepIndicators.forEach(el => el.classList.toggle('active', el.dataset.step === name));
+}
+
+const uploadBox = document.getElementById('upload-box');
+const fileInput = document.getElementById('file-input');
+const uploadError = document.getElementById('upload-error');
+
+uploadBox.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', handleFileSelect);
+
+let workbook = null;
+let worksheet = null;
+let questions = []; // { col, header, examples: string[], isNumeric, answer }
+let answerRowNum = null;
+let originalFileName = '';
+let currentIndex = 0;
+let editingFromReview = false;
+
+function isExampleRow(ws, rowNumber) {
+  const val = String(ws.getRow(rowNumber).getCell(1).value ?? '').trim();
+  return val.startsWith(EXAMPLE_MARKER_PREFIX);
+}
+
+async function handleFileSelect(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  uploadError.style.display = 'none';
+  originalFileName = file.name;
+
+  try {
+    const buffer = await file.arrayBuffer();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer);
+    const ws = wb.worksheets[0];
+    if (!ws) throw new Error('시트를 찾을 수 없습니다.');
+
+    // The "(예시)" marker can sit on more than one consecutive row (2~3 example
+    // rows showing different valid formats), and that block can start on any
+    // row — not just row 2. Find the first marker row, then keep scanning
+    // downward while the marker keeps repeating to find the end of the block.
+    const maxRow = ws.actualRowCount;
+    let firstExampleRow = null;
+    for (let r = 1; r <= maxRow; r++) {
+      if (isExampleRow(ws, r)) { firstExampleRow = r; break; }
+    }
+    if (!firstExampleRow) {
+      throw new Error(`이 파일에서 "${EXAMPLE_MARKER_PREFIX}..." 표시를 찾을 수 없어요. 서식이 맞는 파일인지 확인해주세요.`);
+    }
+    let lastExampleRow = firstExampleRow;
+    while (lastExampleRow + 1 <= maxRow && isExampleRow(ws, lastExampleRow + 1)) {
+      lastExampleRow += 1;
+    }
+
+    const headerRowNum = firstExampleRow - 1;
+    const headerRow = ws.getRow(headerRowNum);
+    const lastCol = ws.actualColumnCount;
+    const parsedQuestions = [];
+    for (let col = 2; col <= lastCol; col++) {
+      const header = headerRow.getCell(col).value;
+      if (header === null || header === undefined || String(header).trim() === '') continue;
+
+      const exampleValues = [];
+      for (let r = firstExampleRow; r <= lastExampleRow; r++) {
+        const v = ws.getRow(r).getCell(col).value;
+        const vStr = v === null || v === undefined ? '' : String(v).trim();
+        if (vStr !== '') exampleValues.push(vStr);
+      }
+      const isNumeric = exampleValues.length > 0 && exampleValues.every(v => !isNaN(Number(v)));
+      parsedQuestions.push({ col, header: String(header).trim(), examples: exampleValues, isNumeric, answer: '' });
+    }
+    if (parsedQuestions.length === 0) {
+      throw new Error('질문 항목을 찾지 못했어요. 예시 줄 바로 위에 항목 이름이 있는지 확인해주세요.');
+    }
+
+    workbook = wb;
+    worksheet = ws;
+    answerRowNum = lastExampleRow + 1;
+    questions = parsedQuestions;
+    currentIndex = 0;
+    editingFromReview = false;
+
+    showQuestion();
+    showStep('question');
+  } catch (err) {
+    uploadError.textContent = '⚠ ' + err.message;
+    uploadError.style.display = 'block';
+  }
+}
+
+const qProgress = document.getElementById('q-progress');
+const qText = document.getElementById('q-text');
+const qExample = document.getElementById('q-example');
+const qInput = document.getElementById('q-input');
+const prevBtn = document.getElementById('prev-btn');
+const nextBtn = document.getElementById('next-btn');
+
+function showQuestion() {
+  const q = questions[currentIndex];
+  qProgress.textContent = `질문 ${currentIndex + 1} / ${questions.length}`;
+  qText.textContent = q.header;
+  qExample.textContent = q.examples.length ? `(예: ${q.examples.join(', ')})` : '';
+  qInput.type = q.isNumeric ? 'number' : 'text';
+  qInput.value = q.answer || '';
+  prevBtn.disabled = currentIndex === 0;
+  nextBtn.textContent = (currentIndex === questions.length - 1) ? '확인하기 →' : '다음 →';
+  qInput.focus();
+}
+
+function saveCurrentAnswer() {
+  questions[currentIndex].answer = qInput.value;
+}
+
+prevBtn.addEventListener('click', () => {
+  saveCurrentAnswer();
+  if (currentIndex > 0) {
+    currentIndex -= 1;
+    showQuestion();
+  }
+});
+
+nextBtn.addEventListener('click', () => {
+  saveCurrentAnswer();
+  if (editingFromReview) {
+    editingFromReview = false;
+    renderReview();
+    showStep('review');
+    return;
+  }
+  if (currentIndex < questions.length - 1) {
+    currentIndex += 1;
+    showQuestion();
+  } else {
+    renderReview();
+    showStep('review');
+  }
+});
+
+qInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') nextBtn.click();
+});
+
+const reviewListEl = document.getElementById('review-list');
+const saveBtn = document.getElementById('save-btn');
+
+function renderReview() {
+  reviewListEl.innerHTML = '';
+  questions.forEach((q, i) => {
+    const div = document.createElement('div');
+    div.className = 'review-item';
+    div.innerHTML = `
+      <div>
+        <div class="label">${escapeHtml(q.header)}</div>
+        <div class="value">${escapeHtml(q.answer) || '<span style="color:var(--muted); font-weight:400;">(입력 안 함)</span>'}</div>
+      </div>
+      <button class="secondary edit-btn" data-idx="${i}">수정</button>
+    `;
+    reviewListEl.appendChild(div);
+  });
+  reviewListEl.querySelectorAll('.edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentIndex = Number(btn.dataset.idx);
+      editingFromReview = true;
+      showQuestion();
+      showStep('question');
+    });
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+saveBtn.addEventListener('click', async () => {
+  saveBtn.disabled = true;
+  saveBtn.textContent = '저장 중...';
+  try {
+    questions.forEach(q => {
+      const row = worksheet.getRow(answerRowNum);
+      row.getCell(q.col).value = q.isNumeric && q.answer !== '' ? Number(q.answer) : q.answer;
+    });
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '작성완료_' + originalFileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showStep('done');
+  } catch (err) {
+    alert('저장 중 문제가 생겼어요: ' + err.message);
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = '✅ 완성된 파일 저장하기';
+  }
+});
+
+document.getElementById('restart-btn').addEventListener('click', () => {
+  workbook = null;
+  worksheet = null;
+  questions = [];
+  currentIndex = 0;
+  editingFromReview = false;
+  fileInput.value = '';
+  showStep('upload');
+});
+
+showStep('upload');
+</script>
+</body>
+</html>
