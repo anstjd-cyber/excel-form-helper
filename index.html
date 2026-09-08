@@ -61,6 +61,37 @@
   .upload-box .icon { font-size: 40px; margin-bottom: 10px; }
   #file-input { display: none; }
 
+  .voice-setting {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    background: #f0f5ff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 20px;
+  }
+  .voice-setting .label { font-size: 16px; }
+  .voice-setting .label small { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  .switch { position: relative; display: inline-block; width: 52px; height: 30px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-track {
+    position: absolute; cursor: pointer; inset: 0;
+    background-color: #cbd5e1; border-radius: 30px; transition: 0.2s;
+  }
+  .switch-track::before {
+    position: absolute; content: ""; height: 24px; width: 24px; left: 3px; bottom: 3px;
+    background-color: white; border-radius: 50%; transition: 0.2s;
+  }
+  .switch input:checked + .switch-track { background-color: var(--accent); }
+  .switch input:checked + .switch-track::before { transform: translateX(22px); }
+
+  .voice-controls { display: flex; gap: 10px; justify-content: center; margin-top: 16px; }
+  .voice-controls button { font-size: 15px; padding: 10px 16px; }
+  .mic-status { text-align: center; color: var(--accent); font-size: 15px; margin-top: 10px; font-weight: 700; }
+
   .error { color: var(--error); font-size: 16px; margin-top: 14px; text-align: center; }
 
   .progress { color: var(--muted); font-size: 16px; margin-bottom: 10px; text-align: center; }
@@ -124,6 +155,16 @@
   </div>
 
   <div id="step-upload" class="panel">
+    <div class="voice-setting">
+      <div class="label">
+        🔊 음성 안내 사용
+        <small>질문을 소리로 읽어주고, 마이크로 답할 수 있어요</small>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="voice-toggle">
+        <span class="switch-track"></span>
+      </label>
+    </div>
     <div class="upload-box" id="upload-box">
       <div class="icon">📁</div>
       <div>여기를 눌러서 엑셀 파일을 선택해주세요</div>
@@ -138,6 +179,11 @@
     <div class="question-text" id="q-text"></div>
     <div class="example-hint" id="q-example"></div>
     <input class="big-input" id="q-input">
+    <div class="voice-controls" id="voice-controls" style="display:none;">
+      <button type="button" class="secondary" id="replay-btn">🔊 다시 듣기</button>
+      <button type="button" id="mic-btn">🎤 말로 답하기</button>
+    </div>
+    <div class="mic-status" id="mic-status" style="display:none;"></div>
     <div class="nav-buttons">
       <button class="secondary" id="prev-btn">← 이전</button>
       <button id="next-btn">다음 →</button>
@@ -277,6 +323,63 @@ const qInput = document.getElementById('q-input');
 const prevBtn = document.getElementById('prev-btn');
 const nextBtn = document.getElementById('next-btn');
 
+// ---- Voice guidance (optional, off by default) ----
+// Text-to-speech is broadly supported; speech-to-text (dictation) only works
+// in Chromium-based browsers (Chrome/Edge) — the mic button hides itself
+// elsewhere if unsupported, and typing always still works either way.
+const voiceToggle = document.getElementById('voice-toggle');
+const voiceControls = document.getElementById('voice-controls');
+const replayBtn = document.getElementById('replay-btn');
+const micBtn = document.getElementById('mic-btn');
+const micStatus = document.getElementById('mic-status');
+
+let voiceEnabled = localStorage.getItem('voiceEnabled') === 'true';
+voiceToggle.checked = voiceEnabled;
+voiceToggle.addEventListener('change', () => {
+  voiceEnabled = voiceToggle.checked;
+  localStorage.setItem('voiceEnabled', String(voiceEnabled));
+});
+
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'ko-KR';
+  window.speechSynthesis.speak(utter);
+}
+
+const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SpeechRecognitionClass) {
+  micBtn.style.display = 'none';
+}
+
+let recognizer = null;
+micBtn?.addEventListener('click', () => {
+  if (!SpeechRecognitionClass) return;
+  recognizer = new SpeechRecognitionClass();
+  recognizer.lang = 'ko-KR';
+  recognizer.continuous = false;
+  recognizer.interimResults = false;
+
+  micBtn.disabled = true;
+  micStatus.style.display = 'block';
+  micStatus.textContent = '🎙 듣고 있어요... 말씀해주세요';
+
+  recognizer.onresult = (event) => {
+    const transcript = event.results[0][0].transcript.trim();
+    qInput.value = transcript;
+    micStatus.textContent = `입력된 답: "${transcript}"`;
+    speak(`입력하신 답은 ${transcript} 입니다. 맞으면 다음으로 넘어가주세요.`);
+  };
+  recognizer.onerror = () => {
+    micStatus.textContent = '⚠ 잘 듣지 못했어요. 다시 눌러서 말씀해주세요.';
+  };
+  recognizer.onend = () => {
+    micBtn.disabled = false;
+  };
+  recognizer.start();
+});
+
 function showQuestion() {
   const q = questions[currentIndex];
   qProgress.textContent = `질문 ${currentIndex + 1} / ${questions.length}`;
@@ -286,8 +389,24 @@ function showQuestion() {
   qInput.value = q.answer || '';
   prevBtn.disabled = currentIndex === 0;
   nextBtn.textContent = (currentIndex === questions.length - 1) ? '확인하기 →' : '다음 →';
-  qInput.focus();
+
+  micStatus.style.display = 'none';
+  if (voiceEnabled) {
+    voiceControls.style.display = 'flex';
+    speakCurrentQuestion();
+  } else {
+    voiceControls.style.display = 'none';
+    qInput.focus();
+  }
 }
+
+function speakCurrentQuestion() {
+  const q = questions[currentIndex];
+  const exampleText = q.examples.length ? ` 예를 들면, ${q.examples.join(', ')} 처럼 답하시면 됩니다.` : '';
+  speak(`${q.header}. ${exampleText}`);
+}
+
+replayBtn?.addEventListener('click', speakCurrentQuestion);
 
 function saveCurrentAnswer() {
   questions[currentIndex].answer = qInput.value;
