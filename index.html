@@ -62,7 +62,7 @@
     transition: 0.2s;
   }
   .step-item .label { margin-left: 8px; font-size: 14px; color: var(--muted); font-weight: 600; white-space: nowrap; }
-  .step-item .bar { width: 32px; height: 2px; background: var(--border); margin: 0 10px; }
+  .step-arrow { color: #c7cbe0; margin: 0 12px; }
   .step-item.active .dot { background: var(--accent); border-color: var(--accent); color: white; }
   .step-item.active .label { color: var(--text); }
   .step-item.done .dot { background: var(--success); border-color: var(--success); color: white; }
@@ -210,12 +210,12 @@
       <div class="dot"><i data-lucide="upload" class="icon" width="16" height="16"></i></div>
       <div class="label">파일 올리기</div>
     </div>
-    <div class="bar"></div>
+    <i data-lucide="arrow-right" class="icon step-arrow" width="16" height="16"></i>
     <div class="step-item" data-step="question">
       <div class="dot"><i data-lucide="pencil-line" class="icon" width="16" height="16"></i></div>
       <div class="label">질문에 답하기</div>
     </div>
-    <div class="bar"></div>
+    <i data-lucide="arrow-right" class="icon step-arrow" width="16" height="16"></i>
     <div class="step-item" data-step="review">
       <div class="dot"><i data-lucide="check-circle-2" class="icon" width="16" height="16"></i></div>
       <div class="label">확인하고 저장</div>
