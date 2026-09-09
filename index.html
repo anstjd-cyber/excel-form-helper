@@ -278,7 +278,7 @@
 </div>
 
 <script>
-const EXAMPLE_MARKER_PREFIX = '(예시';
+const EXAMPLE_MARKER = '예시';
 
 const stepEls = {
   upload: document.getElementById('step-upload'),
@@ -317,7 +317,10 @@ let editingFromReview = false;
 
 function isExampleRow(ws, rowNumber) {
   const val = String(ws.getRow(rowNumber).getCell(1).value ?? '').trim();
-  return val.startsWith(EXAMPLE_MARKER_PREFIX);
+  // Accept both "예시" and "(예시)"-style markers (and variants like
+  // "(예시1)"), since real-world files aren't always consistent about the
+  // parentheses.
+  return val.includes(EXAMPLE_MARKER);
 }
 
 // Some survey files ship separate sheets for different recipients (e.g. a
@@ -354,7 +357,7 @@ async function handleFileSelect(e) {
       if (isExampleRow(ws, r)) { firstExampleRow = r; break; }
     }
     if (!firstExampleRow) {
-      throw new Error(`이 파일에서 "${EXAMPLE_MARKER_PREFIX}..." 표시를 찾을 수 없어요. 서식이 맞는 파일인지 확인해주세요.`);
+      throw new Error(`이 파일에서 "${EXAMPLE_MARKER}" 표시를 찾을 수 없어요. 서식이 맞는 파일인지 확인해주세요.`);
     }
     let lastExampleRow = firstExampleRow;
     while (lastExampleRow + 1 <= maxRow && isExampleRow(ws, lastExampleRow + 1)) {
@@ -363,6 +366,7 @@ async function handleFileSelect(e) {
 
     const headerRowNum = firstExampleRow - 1;
     const headerRow = ws.getRow(headerRowNum);
+    const answerRow = ws.getRow(lastExampleRow + 1);
     const lastCol = ws.actualColumnCount;
     const parsedQuestions = [];
     for (let col = 2; col <= lastCol; col++) {
@@ -376,7 +380,14 @@ async function handleFileSelect(e) {
         if (vStr !== '') exampleValues.push(vStr);
       }
       const isNumeric = exampleValues.length > 0 && exampleValues.every(v => !isNaN(Number(v)));
-      parsedQuestions.push({ col, header: String(header).trim(), examples: exampleValues, isNumeric, answer: '' });
+
+      // The district office sometimes pre-fills a column for every school
+      // (e.g. "시도명" already says "경북") before sending the file out —
+      // use that as the starting answer instead of making the school retype it.
+      const existingVal = answerRow.getCell(col).value;
+      const prefillAnswer = existingVal === null || existingVal === undefined ? '' : String(existingVal).trim();
+
+      parsedQuestions.push({ col, header: String(header).trim(), examples: exampleValues, isNumeric, answer: prefillAnswer });
     }
     if (parsedQuestions.length === 0) {
       throw new Error('질문 항목을 찾지 못했어요. 예시 줄 바로 위에 항목 이름이 있는지 확인해주세요.');
