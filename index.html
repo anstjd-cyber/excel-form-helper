@@ -308,30 +308,151 @@ uploadBox.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', handleFileSelect);
 
 let workbook = null;
-let worksheet = null;
-let questions = []; // { col, header, examples: string[], isNumeric, answer }
-let answerRowNum = null;
+let questions = []; // { header, examples: string[], isNumeric, answer, locations: [{worksheet, col, answerRowNum}] }
 let originalFileName = '';
 let currentIndex = 0;
 let editingFromReview = false;
 
-function isExampleRow(ws, rowNumber) {
-  const val = String(ws.getRow(rowNumber).getCell(1).value ?? '').trim();
-  // Accept both "예시" and "(예시)"-style markers (and variants like
-  // "(예시1)"), since real-world files aren't always consistent about the
-  // parentheses.
-  return val.includes(EXAMPLE_MARKER);
+// Cell values aren't always plain strings — a cell with mixed formatting
+// (part of the text bold/colored, etc.) comes back from ExcelJS as a
+// {richText: [...]} object instead, and String()-ing that yields
+// "[object Object]" instead of the actual text. Formula cells similarly
+// wrap their value as {formula, result}. This normalizes any of those down
+// to the plain text so marker/header detection keeps working either way.
+function cellText(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) return value.richText.map(r => r.text).join('');
+    if (typeof value.text === 'string') return value.text;
+    if ('result' in value) return cellText(value.result);
+    return '';
+  }
+  return String(value);
 }
 
-// Some survey files ship separate sheets for different recipients (e.g. a
-// "학교용" sheet for schools and a "교육지원청용" sheet for the district
-// office). This tool is used by schools, so when there's more than one sheet
-// prefer the one whose name mentions "학교"; otherwise fall back to the first
-// sheet as before.
-function pickWorksheet(wb) {
-  if (wb.worksheets.length <= 1) return wb.worksheets[0];
-  const schoolSheet = wb.worksheets.find(ws => ws.name.includes('학교'));
-  return schoolSheet || wb.worksheets[0];
+// A marker cell IS (essentially) just "예시" — e.g. "예시", "예시 ", "(예시)",
+// "(예시1)". A column header that merely mentions the word in passing, like
+// "기타(예시) 등교시 소지금지 등", must not match, or a header row gets
+// mistaken for the real example row. Requiring the (optionally
+// parenthesized) marker at the very start of the cell tells the two apart.
+function isMarkerText(text) {
+  return text.trim().replace(/^\(/, '').startsWith(EXAMPLE_MARKER);
+}
+
+// The "예시" marker's column isn't always the first one — some files leave
+// column A blank and put the row label (with the marker) in column B
+// onward. Scan the whole row instead of assuming a fixed column.
+function findExampleMarkerCol(ws, rowNumber, lastCol) {
+  const row = ws.getRow(rowNumber);
+  for (let c = 1; c <= lastCol; c++) {
+    if (isMarkerText(cellText(row.getCell(c).value))) return c;
+  }
+  return null;
+}
+
+// Parses one worksheet into a question block, or returns null if it has no
+// "예시" marker (e.g. a cover/instructions sheet). The marker's own column
+// is treated as a row-label column and excluded from the questions.
+function parseSheet(ws) {
+  // ws.actualRowCount/actualColumnCount can under-report on sheets with
+  // multi-row merged headers (observed on a real survey file: it stopped
+  // several rows short of the actual example/answer rows). rowCount/
+  // columnCount reflect the sheet's full used range and don't have that
+  // problem.
+  const maxRow = ws.rowCount;
+  const lastCol = ws.columnCount;
+  let firstExampleRow = null;
+  let markerCol = null;
+  for (let r = 1; r <= maxRow; r++) {
+    const c = findExampleMarkerCol(ws, r, lastCol);
+    if (c) { firstExampleRow = r; markerCol = c; break; }
+  }
+  if (!firstExampleRow) return null;
+
+  // The marker can repeat over several consecutive rows (multiple example
+  // formats shown at once); keep scanning while it keeps appearing in the
+  // same column.
+  let lastExampleRow = firstExampleRow;
+  while (
+    lastExampleRow + 1 <= maxRow &&
+    isMarkerText(cellText(ws.getRow(lastExampleRow + 1).getCell(markerCol).value))
+  ) {
+    lastExampleRow += 1;
+  }
+
+  const headerRowNum = firstExampleRow - 1;
+  const headerRow = ws.getRow(headerRowNum);
+  const answerRowNum = lastExampleRow + 1;
+  const answerRow = ws.getRow(answerRowNum);
+
+  const parsedQuestions = [];
+  for (let col = 1; col <= lastCol; col++) {
+    if (col === markerCol) continue;
+    const header = cellText(headerRow.getCell(col).value).trim();
+    if (!header) continue;
+
+    const exampleValues = [];
+    for (let r = firstExampleRow; r <= lastExampleRow; r++) {
+      const v = cellText(ws.getRow(r).getCell(col).value).trim();
+      if (v) exampleValues.push(v);
+    }
+    const isNumeric = exampleValues.length > 0 && exampleValues.every(v => !isNaN(Number(v)));
+
+    // The district office sometimes pre-fills a column for every school
+    // (e.g. "시도명" already says "경북") before sending the file out —
+    // use that as the starting answer instead of making the school retype it.
+    const prefillAnswer = cellText(answerRow.getCell(col).value).trim();
+
+    parsedQuestions.push({ worksheet: ws, col, answerRowNum, header, examples: exampleValues, isNumeric, answer: prefillAnswer });
+  }
+  return parsedQuestions.length ? parsedQuestions : null;
+}
+
+// Survey files sometimes ship separate sheets for different recipients
+// (e.g. a "학교용" sheet for schools and a "교육지원청용" sheet for the
+// district office). This tool is used by schools: if some candidate sheets
+// are school-facing and others aren't, drop the non-school ones. Multiple
+// school-facing sheets (e.g. two unrelated question sets both marked
+// "학교용") are all kept, since the school needs to fill in each one.
+function pickRelevantSheets(sheetBlocks) {
+  if (sheetBlocks.length <= 1) return sheetBlocks;
+  const school = sheetBlocks.filter(b => b[0].worksheet.name.includes('학교'));
+  const other = sheetBlocks.filter(b => !b[0].worksheet.name.includes('학교'));
+  return (school.length > 0 && other.length > 0) ? school : sheetBlocks;
+}
+
+// Flattens per-sheet question blocks into one ordered list. Two sheets can
+// reuse the exact same header text for genuinely different questions (e.g.
+// this tool has seen a real file where both a "개별학생교육지원" sheet and a
+// "스마트기기" sheet each have their own "반영완료"/"반영일" column, asking
+// about unrelated topics under the same generic label) — silently merging
+// those into one shared answer would write the wrong value into one of the
+// sheets. So each (sheet, column) stays its own question; when a later
+// question repeats an earlier header verbatim, its answer is pre-filled
+// from that earlier answer purely as a time-saving default — the person
+// still sees and can change it before moving on. When there's more than one
+// sheet, the sheet name is prefixed onto the question so identical headers
+// from different sheets aren't confused for one another.
+function buildQuestions(sheetBlocks) {
+  const multiSheet = sheetBlocks.length > 1;
+  const lastAnswerByHeader = new Map();
+  const list = [];
+  sheetBlocks.forEach(block => {
+    block.forEach(q => {
+      const answer = q.answer || lastAnswerByHeader.get(q.header) || '';
+      if (answer) lastAnswerByHeader.set(q.header, answer);
+      const sheetTag = q.worksheet.name.replace(/\(.*?\)\s*$/, '').trim();
+      const header = multiSheet ? `[${sheetTag}] ${q.header}` : q.header;
+      list.push({
+        header,
+        examples: q.examples,
+        isNumeric: q.isNumeric,
+        answer,
+        locations: [{ worksheet: q.worksheet, col: q.col, answerRowNum: q.answerRowNum }],
+      });
+    });
+  });
+  return list;
 }
 
 async function handleFileSelect(e) {
@@ -344,59 +465,17 @@ async function handleFileSelect(e) {
     const buffer = await file.arrayBuffer();
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buffer);
-    const ws = pickWorksheet(wb);
-    if (!ws) throw new Error('시트를 찾을 수 없습니다.');
+    if (!wb.worksheets.length) throw new Error('시트를 찾을 수 없습니다.');
 
-    // The "(예시)" marker can sit on more than one consecutive row (2~3 example
-    // rows showing different valid formats), and that block can start on any
-    // row — not just row 2. Find the first marker row, then keep scanning
-    // downward while the marker keeps repeating to find the end of the block.
-    const maxRow = ws.actualRowCount;
-    let firstExampleRow = null;
-    for (let r = 1; r <= maxRow; r++) {
-      if (isExampleRow(ws, r)) { firstExampleRow = r; break; }
-    }
-    if (!firstExampleRow) {
+    const sheetBlocks = pickRelevantSheets(
+      wb.worksheets.map(parseSheet).filter(Boolean)
+    );
+    if (sheetBlocks.length === 0) {
       throw new Error(`이 파일에서 "${EXAMPLE_MARKER}" 표시를 찾을 수 없어요. 서식이 맞는 파일인지 확인해주세요.`);
-    }
-    let lastExampleRow = firstExampleRow;
-    while (lastExampleRow + 1 <= maxRow && isExampleRow(ws, lastExampleRow + 1)) {
-      lastExampleRow += 1;
-    }
-
-    const headerRowNum = firstExampleRow - 1;
-    const headerRow = ws.getRow(headerRowNum);
-    const answerRow = ws.getRow(lastExampleRow + 1);
-    const lastCol = ws.actualColumnCount;
-    const parsedQuestions = [];
-    for (let col = 2; col <= lastCol; col++) {
-      const header = headerRow.getCell(col).value;
-      if (header === null || header === undefined || String(header).trim() === '') continue;
-
-      const exampleValues = [];
-      for (let r = firstExampleRow; r <= lastExampleRow; r++) {
-        const v = ws.getRow(r).getCell(col).value;
-        const vStr = v === null || v === undefined ? '' : String(v).trim();
-        if (vStr !== '') exampleValues.push(vStr);
-      }
-      const isNumeric = exampleValues.length > 0 && exampleValues.every(v => !isNaN(Number(v)));
-
-      // The district office sometimes pre-fills a column for every school
-      // (e.g. "시도명" already says "경북") before sending the file out —
-      // use that as the starting answer instead of making the school retype it.
-      const existingVal = answerRow.getCell(col).value;
-      const prefillAnswer = existingVal === null || existingVal === undefined ? '' : String(existingVal).trim();
-
-      parsedQuestions.push({ col, header: String(header).trim(), examples: exampleValues, isNumeric, answer: prefillAnswer });
-    }
-    if (parsedQuestions.length === 0) {
-      throw new Error('질문 항목을 찾지 못했어요. 예시 줄 바로 위에 항목 이름이 있는지 확인해주세요.');
     }
 
     workbook = wb;
-    worksheet = ws;
-    answerRowNum = lastExampleRow + 1;
-    questions = parsedQuestions;
+    questions = buildQuestions(sheetBlocks);
     currentIndex = 0;
     editingFromReview = false;
 
@@ -574,8 +653,10 @@ saveBtn.addEventListener('click', async () => {
   saveBtn.innerHTML = '저장 중...';
   try {
     questions.forEach(q => {
-      const row = worksheet.getRow(answerRowNum);
-      row.getCell(q.col).value = q.isNumeric && q.answer !== '' ? Number(q.answer) : q.answer;
+      const value = q.isNumeric && q.answer !== '' ? Number(q.answer) : q.answer;
+      q.locations.forEach(loc => {
+        loc.worksheet.getRow(loc.answerRowNum).getCell(loc.col).value = value;
+      });
     });
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -599,7 +680,6 @@ saveBtn.addEventListener('click', async () => {
 
 document.getElementById('restart-btn').addEventListener('click', () => {
   workbook = null;
-  worksheet = null;
   questions = [];
   currentIndex = 0;
   editingFromReview = false;
