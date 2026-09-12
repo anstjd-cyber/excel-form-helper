@@ -408,6 +408,71 @@ function parseSheet(ws) {
   return parsedQuestions.length ? parsedQuestions : null;
 }
 
+// --- Fallback for files with no "예시" marker at all ---
+// Some templates skip any textual marker and just fill in a plausible-looking
+// sample row directly under the headers (e.g. "1 | oo초등학교 | 경북안동시 | ...").
+// With nothing to search for, this guesses the structure instead: a header
+// row is one where every filled cell has a DISTINCT value (a merged title
+// row instead repeats the identical text into every cell it spans, which is
+// how ExcelJS reports merged cells — that rules it out). The row right below
+// the header is treated as a sample only if it's densely filled like real
+// data; otherwise there's no sample and the row right below the header is
+// itself the first blank row to fill in.
+function rowDensity(ws, r, lastCol) {
+  const row = ws.getRow(r);
+  let count = 0;
+  for (let c = 1; c <= lastCol; c++) {
+    if (cellText(row.getCell(c).value).trim()) count += 1;
+  }
+  return count;
+}
+
+function looksLikeHeaderRow(ws, r, lastCol) {
+  const row = ws.getRow(r);
+  const values = [];
+  for (let c = 1; c <= lastCol; c++) {
+    const t = cellText(row.getCell(c).value).trim();
+    if (t) values.push(t);
+  }
+  if (values.length < 3) return false;
+  return new Set(values).size === values.length;
+}
+
+function parseSheetFallback(ws) {
+  const maxRow = ws.rowCount;
+  const lastCol = ws.columnCount;
+  let headerRowNum = null;
+  for (let r = 1; r <= maxRow; r++) {
+    if (looksLikeHeaderRow(ws, r, lastCol)) { headerRowNum = r; break; }
+  }
+  if (!headerRowNum) return null;
+
+  const headerRow = ws.getRow(headerRowNum);
+  const headerDensity = rowDensity(ws, headerRowNum, lastCol);
+  const sampleRowNum = headerRowNum + 1;
+  const sampleDensity = sampleRowNum <= maxRow ? rowDensity(ws, sampleRowNum, lastCol) : 0;
+  const hasSampleRow = sampleDensity >= Math.max(3, Math.ceil(headerDensity * 0.6));
+  const answerRowNum = hasSampleRow ? sampleRowNum + 1 : sampleRowNum;
+  const answerRow = ws.getRow(answerRowNum);
+
+  const parsedQuestions = [];
+  for (let col = 1; col <= lastCol; col++) {
+    const header = cellText(headerRow.getCell(col).value).trim();
+    if (!header) continue;
+
+    const examples = [];
+    if (hasSampleRow) {
+      const v = cellText(ws.getRow(sampleRowNum).getCell(col).value).trim();
+      if (v) examples.push(v);
+    }
+    const isNumeric = examples.length > 0 && examples.every(v => !isNaN(Number(v)));
+    const prefillAnswer = cellText(answerRow.getCell(col).value).trim();
+
+    parsedQuestions.push({ worksheet: ws, col, answerRowNum, header, examples, isNumeric, answer: prefillAnswer });
+  }
+  return parsedQuestions.length ? parsedQuestions : null;
+}
+
 // Survey files sometimes ship separate sheets for different recipients
 // (e.g. a "학교용" sheet for schools and a "교육지원청용" sheet for the
 // district office). This tool is used by schools: if some candidate sheets
@@ -467,11 +532,19 @@ async function handleFileSelect(e) {
     await wb.xlsx.load(buffer);
     if (!wb.worksheets.length) throw new Error('시트를 찾을 수 없습니다.');
 
-    const sheetBlocks = pickRelevantSheets(
+    // Prefer the explicit "예시" marker when it exists anywhere in the
+    // workbook — it's an unambiguous signal. Only fall back to guessing the
+    // structure from row shape when no sheet has one at all.
+    let sheetBlocks = pickRelevantSheets(
       wb.worksheets.map(parseSheet).filter(Boolean)
     );
     if (sheetBlocks.length === 0) {
-      throw new Error(`이 파일에서 "${EXAMPLE_MARKER}" 표시를 찾을 수 없어요. 서식이 맞는 파일인지 확인해주세요.`);
+      sheetBlocks = pickRelevantSheets(
+        wb.worksheets.map(parseSheetFallback).filter(Boolean)
+      );
+    }
+    if (sheetBlocks.length === 0) {
+      throw new Error(`이 파일에서 "${EXAMPLE_MARKER}" 표시나 알아볼 수 있는 표 구조를 찾을 수 없어요. 서식이 맞는 파일인지 확인해주세요.`);
     }
 
     workbook = wb;
