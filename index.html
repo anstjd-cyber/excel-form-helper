@@ -601,6 +601,10 @@ if (!SpeechRecognitionClass) {
 let recognizer = null;
 micBtn?.addEventListener('click', () => {
   if (!SpeechRecognitionClass) return;
+  // Stop reading the question aloud so it doesn't keep talking over the
+  // person while they're trying to answer.
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+
   recognizer = new SpeechRecognitionClass();
   recognizer.lang = 'ko-KR';
   recognizer.continuous = false;
@@ -612,7 +616,9 @@ micBtn?.addEventListener('click', () => {
   lucide.createIcons();
 
   recognizer.onresult = (event) => {
-    const transcript = event.results[0][0].transcript.trim();
+    // Korean dictation results often end with an auto-inserted "." — strip
+    // trailing sentence punctuation so it doesn't end up in the answer.
+    const transcript = event.results[0][0].transcript.trim().replace(/[.,!?、。]+$/, '').trim();
     qInput.value = transcript;
     micStatus.textContent = `입력된 답: "${transcript}"`;
     speak(`입력하신 답은 ${transcript} 입니다. 맞으면 다음으로 넘어가주세요.`);
